@@ -24,6 +24,7 @@ MCP tools called:
 - `package_maze.get_setup_context`
 - `package_maze.plan_repository_setup`
 - `package_maze.review_repository_setup`
+- `package_maze.get_package_activity`
 
 MCP resources read:
 
@@ -166,15 +167,45 @@ npmjs
 added 842 packages, and audited 847 packages in 59s
 ```
 
-That confirms the runtime npm config was present. PackageMaze MCP still returned
-zero Package Usage and Package Resolution rows for `repository=allwhat/marko`,
-and an unfiltered search for an expected dependency such as `@babel/core` also
-returned zero rows. The next diagnostic added to the CircleCI install step is
-`--loglevel=http` so the job log shows whether npm fetched from
-`pkg.packagemaze.com` or `registry.npmjs.org`. If the HTTP log shows
-`pkg.packagemaze.com`, the likely issue is PackageMaze recording or attribution
-for proxied upstream npm installs. If it shows `registry.npmjs.org`, the issue
-is PackageMaze setup guidance for npm lockfile host replacement.
+That confirmed the runtime npm config was present, but not yet that the tarball
+fetches were actually routed through PackageMaze. The next diagnostic added to
+the CircleCI install step was `--loglevel=http`.
+
+The user then supplied the CircleCI HTTP log from that run at
+`/Users/kkoz/Downloads/maze_log.log`. After stripping ANSI color codes, the log
+showed:
+
+```text
+PackageMaze feed URL lines: 840
+PackageMaze GET 200 tarball fetches: 838
+PackageMaze POST 200 advisory requests: 1
+cache misses: 838
+registry.npmjs.org lines: 0
+```
+
+Representative lines included successful `GET 200` tarball fetches for
+`yocto-queue`, `typescript`, and `@babel/core` from:
+
+```text
+https://pkg.packagemaze.com/packagemaze/dogfood-npm/
+```
+
+The log resolves the configuration question: npm did install through
+PackageMaze, including lockfile-host replacement for upstream npm packages.
+There were no direct `registry.npmjs.org` fetches in this install log.
+
+After that evidence, I rechecked PackageMaze package activity through MCP:
+
+- `repository=allwhat/marko`, `query=yocto-queue`: zero Package Usage rows and
+  zero Package Resolution rows
+- unfiltered `query=yocto-queue`: zero rows
+- unfiltered `query=typescript`: zero rows
+- `source_type=proxied_upstream`: zero rows
+
+The remaining issue is therefore not the customer repository configuration. It
+is PackageMaze visibility: recording, read-model projection, UI filtering, or
+CI/repository attribution for proxied upstream npm requests served through the
+Package Client Domain.
 
 ## PackageMaze Friction And Gaps
 
@@ -210,6 +241,14 @@ The PackageMaze CircleCI path currently relies on manually installing the
 command, or clearer copy-paste snippet would make the customer path less
 hand-rolled.
 
+The public troubleshooting surface has a visibility gap after successful OIDC
+exchange. In this run, PackageMaze showed the CircleCI OIDC exchange, npm logs
+showed hundreds of successful Package Client Domain requests, but PackageMaze
+Package Usage and Resolution History remained empty through MCP queries. As an
+external user agent, I had no public way to ask PackageMaze to correlate the
+OIDC exchange, minted Token, Feed, CI run, repository, and package-client HTTP
+requests.
+
 The docs should explicitly distinguish:
 
 - CircleCI project setup: user and CircleCI responsibility
@@ -237,6 +276,15 @@ whole workflow.
   as the package-client install step.
 - Warn when a CI package install abstraction or restored cache may produce an
   OIDC exchange but no package downloads visible to PackageMaze.
+- Record and surface proxied upstream npm tarball downloads served through the
+  Package Client Domain, including enough Feed, Token, CI, and repository
+  context for a user to understand the install path.
+- Add a feed or CI-session "doctor" that can say: OIDC exchange succeeded, Token
+  minted, package-client requests observed, package activity rows created or
+  missing.
+- Let MCP query package-client request evidence by Feed, CI session, run,
+  repository, and package name, even if Package Usage or Package Resolution rows
+  were not projected.
 - Stop classifying CircleCI Docker executors as Docker image builds unless a
   Docker build command or Dockerfile package-client install is present.
 - Prefer the nearest project package-client config once for npm workspaces with
