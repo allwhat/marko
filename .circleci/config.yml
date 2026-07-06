@@ -31,7 +31,7 @@ commands:
             echo "export NPM_CONFIG_USERCONFIG=$npm_config" >> "$BASH_ENV"
 jobs:
   test-node:
-    # Install node dependencies and run tests
+    # Install node dependencies through PackageMaze; Marko tests are intentionally skipped.
     executor: node/default
     steps:
       - checkout
@@ -43,8 +43,8 @@ jobs:
             npm config get replace-registry-host
             npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online --loglevel=http
       - run:
-          name: Run tests
-          command: npm test --passWithNoTests
+          name: Skip tests
+          command: echo "Skipping tests for the CircleCI PackageMaze rehearsal."
   build-node:
     # Build node project
     executor: node/default

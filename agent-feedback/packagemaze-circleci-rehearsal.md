@@ -207,6 +207,14 @@ is PackageMaze visibility: recording, read-model projection, UI filtering, or
 CI/repository attribution for proxied upstream npm requests served through the
 Package Client Domain.
 
+The next full CircleCI log showed the `Run tests` step failing with a Node/V8
+out-of-memory error after running the Marko Mocha suite for about two and a half
+minutes. The failing command was `npm test --passWithNoTests`; npm warned that
+`--passWithNoTests` is an unknown npm config, so that flag was not useful here.
+Because this rehearsal is about PackageMaze install routing, not Marko test
+coverage, I disabled the CircleCI test execution while preserving the
+PackageMaze-backed dependency install step.
+
 ## PackageMaze Friction And Gaps
 
 CircleCI-specific guidance is too thin in the MCP setup flow. The public
