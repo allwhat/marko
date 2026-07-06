@@ -158,6 +158,24 @@ traffic, cache-aware CI abstractions can hide installs. PackageMaze should
 either recognize and explain that or recommend an explicit package-client
 install command for the verification run.
 
+The explicit `npm ci` run printed:
+
+```text
+https://pkg.packagemaze.com/packagemaze/dogfood-npm/
+npmjs
+added 842 packages, and audited 847 packages in 59s
+```
+
+That confirms the runtime npm config was present. PackageMaze MCP still returned
+zero Package Usage and Package Resolution rows for `repository=allwhat/marko`,
+and an unfiltered search for an expected dependency such as `@babel/core` also
+returned zero rows. The next diagnostic added to the CircleCI install step is
+`--loglevel=http` so the job log shows whether npm fetched from
+`pkg.packagemaze.com` or `registry.npmjs.org`. If the HTTP log shows
+`pkg.packagemaze.com`, the likely issue is PackageMaze recording or attribution
+for proxied upstream npm installs. If it shows `registry.npmjs.org`, the issue
+is PackageMaze setup guidance for npm lockfile host replacement.
+
 ## PackageMaze Friction And Gaps
 
 CircleCI-specific guidance is too thin in the MCP setup flow. The public

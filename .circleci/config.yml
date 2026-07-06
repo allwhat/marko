@@ -41,7 +41,7 @@ jobs:
           command: |
             npm config get registry
             npm config get replace-registry-host
-            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online --loglevel=http
       - run:
           name: Run tests
           command: npm test --passWithNoTests
@@ -56,7 +56,7 @@ jobs:
           command: |
             npm config get registry
             npm config get replace-registry-host
-            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online --loglevel=http
       - run:
           command: npm run build
       - run:
