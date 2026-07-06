@@ -36,9 +36,6 @@
     "!**/__tests__",
     "!**/*.tsbuildinfo"
   ],
-  "publishConfig": {
-    "registry": "https://pkg.packagemaze.com/packagemaze/dogfood-npm/"
-  },
   "scripts": {
     "build": "node -r ~ts ./scripts/bundle.mts"
   },
@@ -50,6 +47,9 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "registry": "https://pkg.packagemaze.com/packagemaze/dogfood-npm/"
   },
   "exports:override": {
     ".": {

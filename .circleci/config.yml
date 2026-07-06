@@ -36,8 +36,12 @@ jobs:
     steps:
       - checkout
       - configure-packagemaze-npm
-      - node/install-packages:
-          pkg-manager: npm
+      - run:
+          name: Install dependencies through PackageMaze
+          command: |
+            npm config get registry
+            npm config get replace-registry-host
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online
       - run:
           name: Run tests
           command: npm test --passWithNoTests
@@ -47,8 +51,12 @@ jobs:
     steps:
       - checkout
       - configure-packagemaze-npm
-      - node/install-packages:
-          pkg-manager: npm
+      - run:
+          name: Install dependencies through PackageMaze
+          command: |
+            npm config get registry
+            npm config get replace-registry-host
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online
       - run:
           command: npm run build
       - run:
@@ -69,10 +77,10 @@ jobs:
       # Replace this with steps to deploy to users
       - run:
           name: deploy
-          command: '#e.g. ./deploy.sh'
+          command: "#e.g. ./deploy.sh"
       - run:
           name: found github actions config
-          command: ':'
+          command: ":"
 workflows:
   build-and-test:
     jobs:

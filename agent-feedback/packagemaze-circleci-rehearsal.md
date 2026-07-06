@@ -143,6 +143,21 @@ CircleCI-native package install abstractions, especially:
 - a PackageMaze auth/setup command immediately before that orb command
 - CircleCI `BASH_ENV`-based propagation of `NPM_CONFIG_USERCONFIG`
 
+After the PR was picked up by CircleCI, PackageMaze showed the CircleCI OIDC
+exchange but no package installs through the Feed. That means the auth exchange
+step ran, but the package-client install step did not produce observable
+PackageMaze package traffic. The likely causes are either the CircleCI node orb
+install abstraction using cache in a way that avoided registry fetches, or the
+orb not honoring the expected npm config environment. The PR was then adjusted
+to use an explicit `npm ci` step with a fresh per-job npm cache directory after
+the PackageMaze config step so the package client should make observable
+registry requests.
+
+This should become PackageMaze guidance: when the user wants to verify package
+traffic, cache-aware CI abstractions can hide installs. PackageMaze should
+either recognize and explain that or recommend an explicit package-client
+install command for the verification run.
+
 ## PackageMaze Friction And Gaps
 
 CircleCI-specific guidance is too thin in the MCP setup flow. The public
@@ -202,6 +217,8 @@ whole workflow.
   - set `NPM_CONFIG_USERCONFIG` before the install step
 - Add a CircleCI-specific review rule that recognizes `node/install-packages`
   as the package-client install step.
+- Warn when a CI package install abstraction or restored cache may produce an
+  OIDC exchange but no package downloads visible to PackageMaze.
 - Stop classifying CircleCI Docker executors as Docker image builds unless a
   Docker build command or Dockerfile package-client install is present.
 - Prefer the nearest project package-client config once for npm workspaces with
