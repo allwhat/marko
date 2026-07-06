@@ -320,3 +320,90 @@ token. The real end-to-end checks are:
 - whether `node/install-packages` honors `NPM_CONFIG_USERCONFIG` from
   `BASH_ENV`
 - whether PackageMaze records Package Usage and Resolution History for the run
+
+## Internal Source And Cloudflare Investigation
+
+After the user allowed PackageMaze source, Cloudflare, and production storage
+inspection, I checked the production CI Session and the relevant read models.
+
+The CircleCI side was healthy:
+
+- latest successful CircleCI pipeline/run:
+  `ea51eef9-decb-4584-9fb2-386d62e286d1`
+- CircleCI workflow id:
+  `27c162b4-ac8d-426e-8561-4203b29d5e5f`
+- PackageMaze CI Session:
+  `cis_70847ee83a4d37cf32f3f174f17401cc6a60a5fe55cd0dbfec5580338aedd61b`
+- PackageMaze production D1 `ci_sessions` had the matching repository,
+  run id, workflow ref, branch ref, and two successful OIDC exchanges.
+- The two minted CI Tokens were linked through `token_ci_contexts` to the same
+  CI Session and had `last_used_at` timestamps during the CircleCI jobs:
+  - `tok_ee80713e6e0d4fd3b8d95c784b93765e` last used at
+    `2026-07-06T20:58:26Z`
+  - `tok_244097908def44eeac4a481e949168a5` last used at
+    `2026-07-06T20:59:28Z`
+
+Production aggregate usage also proved PackageMaze observed package-client
+traffic:
+
+- `usage_event_dedupe` contained 1,676 `artifact_download_usage_v1` events
+  between `2026-07-06T20:57:40Z` and `2026-07-06T20:59:28Z`, matching two npm
+  install jobs at roughly 838 tarball downloads each.
+- `usage_daily` and `usage_period_daily` had npm `artifact_blob_download`
+  aggregate rows for the dogfood Feed, source `cached`, status `completed`,
+  and latest event time `2026-07-06T20:59:28Z`.
+- The R2 usage ledger had per-event package details. Example records included:
+  - `wrappy@1.0.2`, token
+    `tok_ee80713e6e0d4fd3b8d95c784b93765e`, serving source `upstream`,
+    `packageVersionId: null`
+  - `webidl-conversions@8.0.1`, token
+    `tok_244097908def44eeac4a481e949168a5`, serving source `upstream`,
+    `packageVersionId: null`
+
+The empty Package Usage and Resolution History is therefore a PackageMaze
+read-model/product semantics issue, not a Marko or CircleCI setup issue.
+
+Relevant source paths:
+
+- `runtime-worker/src/npm/package-routes.ts`
+  - cold upstream npm tarball serving calls `enqueueArtifactUsageMetering`
+    through `meteredNpmColdUpstreamArtifactBody`
+  - `npmColdUpstreamUsageDescriptor` records package name, version, size, and
+    `source: "cached"`, but sets `packageVersionId: null`
+- `runtime-worker/src/product-state/download-usage.ts`
+  - `enqueueArtifactUsageMetering` creates aggregate metering only
+  - Package Usage History rollups are only written when the queued message has
+    `packageUsageActivity`, which requires a retained Package Version id
+  - the existing test explicitly covers "artifact metering without Package
+    Usage History activity"
+- `runtime-worker/src/product-state/package-resolution-usage.ts`
+  - Package Resolution History rows are written only when a package version id
+    or policy-withheld package version id exists
+  - cold upstream metadata usage has no package version id, so no Package
+    Resolution History row is created
+- `runtime-worker/src/product-state/repository.ts`
+  - CI Session `observedPackageMazeTraffic` is computed from
+    `package_usage_activity_rollups` plus `package_resolution_activities`
+    only
+  - aggregate `usage_daily` traffic and R2 usage-ledger evidence do not count
+- `runtime-worker/src/hosted-mcp/tools/ci-session-report.ts` and
+  `frontend/src/components/OrganizationSessionsWorkspace.tsx`
+  - the MCP and UI then report "minted tokens but did not observe package
+    activity" even when PackageMaze did observe package-client tarball traffic
+
+Recommended PackageMaze follow-up:
+
+- Change the CI Session report terminology so "observed PackageMaze traffic"
+  means package-client traffic that reached PackageMaze, not only known
+  Package Version history rows.
+- Add a separate signal such as "observed package-client requests" based on
+  aggregate usage or a new package-client request read model.
+- Surface cold upstream package names and versions from the usage ledger or a
+  durable D1 projection, even when `packageVersionId` is null.
+- Decide whether successful cold upstream tarball installs should immediately
+  create retained Package Version records, or whether Package Usage History
+  should remain known-retained-artifact-only and the CI Session view should get
+  a distinct "observed upstream package-client traffic" table.
+- Update the UI and MCP copy so users do not debug CircleCI/npm config when the
+  actual state is "requests were observed, but no known Package Version history
+  rows were projected."
