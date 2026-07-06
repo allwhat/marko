@@ -88,7 +88,8 @@
     "node": "18 || 20 || >=22"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://pkg.packagemaze.com/packagemaze/dogfood-npm/"
   },
   "exports:override": {
     ".": {

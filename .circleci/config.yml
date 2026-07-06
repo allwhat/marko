@@ -1,0 +1,183 @@
+version: 2.1
+
+parameters:
+  publish_packages:
+    type: boolean
+    default: false
+
+commands:
+  install_packagemaze_cli:
+    steps:
+      - run:
+          name: Install PackageMaze CLI
+          command: |
+            set -euo pipefail
+            maze_version="v0.0.2"
+            install_dir="$HOME/.local/bin"
+            mkdir -p "$install_dir"
+            curl -fsSL "https://github.com/packagemaze/maze-cli/releases/download/${maze_version}/maze_linux_amd64.tar.gz" -o /tmp/maze.tar.gz
+            tar -xzf /tmp/maze.tar.gz -C "$install_dir" maze
+            chmod +x "$install_dir/maze"
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+
+  configure_packagemaze_npm:
+    parameters:
+      purpose:
+        type: enum
+        enum: ["install", "publish"]
+        default: "install"
+      package:
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: Configure npm for PackageMaze << parameters.purpose >>
+          command: |
+            set -euo pipefail
+            source "$BASH_ENV"
+
+            args=(--feed "packagemaze/dogfood-npm" --purpose "<< parameters.purpose >>" --format shell)
+            if [ -n "<< parameters.package >>" ]; then
+              args+=(--package "<< parameters.package >>")
+            fi
+
+            MAZE_OIDC_TOKEN="$(circleci run oidc get --claims '{"aud":"https://api.packagemaze.com"}')"
+            export MAZE_OIDC_TOKEN
+            eval "$(maze auth exchange-oidc "${args[@]}")"
+
+            umask 077
+            npm_config="$(mktemp)"
+            {
+              echo "registry=${MAZE_FEED_BASE_URL%/}/"
+              echo "replace-registry-host=npmjs"
+              printf '%s\n' "//pkg.packagemaze.com/packagemaze/dogfood-npm/:_authToken=${MAZE_TOKEN}"
+            } > "$npm_config"
+            echo "export NPM_CONFIG_USERCONFIG=$npm_config" >> "$BASH_ENV"
+
+executors:
+  node:
+    parameters:
+      version:
+        type: string
+    docker:
+      - image: cimg/node:<< parameters.version >>
+
+jobs:
+  build:
+    executor:
+      name: node
+      version: "26.4"
+    steps:
+      - checkout
+      - install_packagemaze_cli
+      - configure_packagemaze_npm
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - run:
+          name: Build
+          command: npm run @ci:build
+      - run:
+          name: Lint
+          command: npm run @ci:lint
+
+  test:
+    parameters:
+      node_version:
+        type: string
+    executor:
+      name: node
+      version: << parameters.node_version >>
+    steps:
+      - checkout
+      - install_packagemaze_cli
+      - configure_packagemaze_npm
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - run:
+          name: Test
+          command: npm run @ci:test
+
+  publish_package:
+    parameters:
+      package:
+        type: string
+      workspace:
+        type: string
+      tag:
+        type: string
+        default: "latest"
+    executor:
+      name: node
+      version: "26.4"
+    steps:
+      - checkout
+      - install_packagemaze_cli
+      - configure_packagemaze_npm
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - run:
+          name: Build
+          command: npm run @ci:build
+      - configure_packagemaze_npm:
+          purpose: publish
+          package: << parameters.package >>
+      - run:
+          name: Publish << parameters.package >>
+          command: npm publish --workspace << parameters.workspace >> --tag << parameters.tag >>
+
+  publish_marko_aliases:
+    executor:
+      name: node
+      version: "26.4"
+    steps:
+      - checkout
+      - install_packagemaze_cli
+      - configure_packagemaze_npm
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - run:
+          name: Build
+          command: npm run @ci:build
+      - configure_packagemaze_npm:
+          purpose: publish
+          package: marko
+      - run:
+          name: Publish marko aliases
+          command: npm run @ci:release-alias
+
+workflows:
+  build_and_test:
+    jobs:
+      - build
+      - test:
+          matrix:
+            parameters:
+              node_version: ["22.23", "24.18", "26.4"]
+
+  publish:
+    when: << pipeline.parameters.publish_packages >>
+    jobs:
+      - publish_package:
+          name: publish-compiler
+          package: "@marko/compiler"
+          workspace: "@marko/compiler"
+          filters:
+            branches:
+              only: main
+      - publish_package:
+          name: publish-runtime-tags
+          package: "@marko/runtime-tags"
+          workspace: "@marko/runtime-tags"
+          filters:
+            branches:
+              only: main
+      - publish_marko_aliases:
+          requires:
+            - publish-runtime-tags
+          filters:
+            branches:
+              only: main
