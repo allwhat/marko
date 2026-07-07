@@ -1,0 +1,93 @@
+# This config was automatically generated from your source code
+# Stacks detected: cicd:github-actions:.github/workflows,deps:node:.
+version: 2.1
+orbs:
+  node: circleci/node@5
+commands:
+  configure-packagemaze-npm:
+    steps:
+      - run:
+          name: Configure npm for PackageMaze
+          command: |
+            set -euo pipefail
+            maze_version="v0.0.2"
+            install_dir="$HOME/.local/bin"
+            mkdir -p "$install_dir"
+            curl -fsSL "https://github.com/packagemaze/maze-cli/releases/download/${maze_version}/maze_linux_amd64.tar.gz" -o /tmp/maze.tar.gz
+            tar -xzf /tmp/maze.tar.gz -C "$install_dir" maze
+            chmod +x "$install_dir/maze"
+
+            MAZE_OIDC_TOKEN="$(circleci run oidc get --claims '{"aud":"https://api.packagemaze.com"}')"
+            export MAZE_OIDC_TOKEN
+            eval "$("$install_dir/maze" auth exchange-oidc --feed "packagemaze/dogfood-npm" --purpose install --format shell)"
+
+            umask 077
+            npm_config="$(mktemp)"
+            {
+              echo "registry=${MAZE_FEED_BASE_URL%/}/"
+              echo "replace-registry-host=npmjs"
+              printf '%s\n' "//pkg.packagemaze.com/packagemaze/dogfood-npm/:_authToken=${MAZE_TOKEN}"
+            } > "$npm_config"
+            echo "export NPM_CONFIG_USERCONFIG=$npm_config" >> "$BASH_ENV"
+jobs:
+  test-node:
+    # Install node dependencies through PackageMaze; Marko tests are intentionally skipped.
+    executor: node/default
+    steps:
+      - checkout
+      - configure-packagemaze-npm
+      - run:
+          name: Install dependencies through PackageMaze
+          command: |
+            npm config get registry
+            npm config get replace-registry-host
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online --loglevel=http
+      - run:
+          name: Skip tests
+          command: echo "Skipping tests for the CircleCI PackageMaze rehearsal."
+  build-node:
+    # Build node project
+    executor: node/default
+    steps:
+      - checkout
+      - configure-packagemaze-npm
+      - run:
+          name: Install dependencies through PackageMaze
+          command: |
+            npm config get registry
+            npm config get replace-registry-host
+            npm ci --cache "$PWD/.npm-cache-packagemaze" --prefer-online --loglevel=http
+      - run:
+          command: npm run build
+      - run:
+          name: Create the ~/artifacts directory if it doesn't exist
+          command: mkdir -p ~/artifacts
+      # Copy output to artifacts dir
+      - run:
+          name: Copy artifacts
+          command: cp -R build dist public .output .next .docusaurus ~/artifacts 2>/dev/null || true
+      - store_artifacts:
+          path: ~/artifacts
+          destination: node-build
+  deploy:
+    # This is an example deploy job, not actually used by the workflow
+    docker:
+      - image: cimg/base:stable
+    steps:
+      # Replace this with steps to deploy to users
+      - run:
+          name: deploy
+          command: "#e.g. ./deploy.sh"
+      - run:
+          name: found github actions config
+          command: ":"
+workflows:
+  build-and-test:
+    jobs:
+      - test-node
+      - build-node:
+          requires:
+            - test-node
+    # - deploy:
+    #     requires:
+    #       - build-node

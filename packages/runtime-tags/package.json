@@ -48,6 +48,9 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "registry": "https://pkg.packagemaze.com/packagemaze/dogfood-npm/"
+  },
   "exports:override": {
     ".": {
       "types": "./index.d.ts"
