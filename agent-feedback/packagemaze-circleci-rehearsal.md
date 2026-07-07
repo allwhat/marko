@@ -363,6 +363,32 @@ traffic:
 The empty Package Usage and Resolution History is therefore a PackageMaze
 read-model/product semantics issue, not a Marko or CircleCI setup issue.
 
+I also checked the duplicate tarball lines visible in the CircleCI npm HTTP
+logs. The step output for CircleCI job `17` contained 838 npm tarball `GET`
+lines through the PackageMaze Feed and 778 unique tarball URLs. The duplicate
+requests line up with duplicated package locations in `package-lock.json`.
+For example, npm fetched `prettier-2.8.8.tgz` twice:
+
+```text
+npm http fetch GET 200 https://pkg.packagemaze.com/packagemaze/dogfood-npm/prettier/-/prettier-2.8.8.tgz 50834ms (cache miss)
+npm http fetch GET 200 https://pkg.packagemaze.com/packagemaze/dogfood-npm/prettier/-/prettier-2.8.8.tgz 50919ms (cache miss)
+```
+
+The lockfile has two distinct package nodes that resolve to that tarball:
+
+```text
+node_modules/@changesets/apply-release-plan/node_modules/prettier
+node_modules/@changesets/write/node_modules/prettier
+```
+
+This is not evidence that CircleCI duplicated the step or that PackageMaze
+configured npm incorrectly. It is npm installing two package locations from a
+fresh per-job cache, with concurrent tarball fetches completing at nearly the
+same time. The PackageMaze-specific expectation is that duplicate artifact
+requests are harmless: they should be recorded in the CI Session, should warm or
+hit the PackageMaze cache on subsequent runs, and ideally should be coalesced
+while an identical cold upstream fetch is already in flight.
+
 Relevant source paths:
 
 - `runtime-worker/src/npm/package-routes.ts`
