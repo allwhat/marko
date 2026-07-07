@@ -420,6 +420,32 @@ I filed PackageMaze follow-up issue
 workflow execution grouping and replace the `Package not requested` copy with
 language such as "Feed-wide token" or "No package scope".
 
+Follow-up checks on CircleCI OIDC showed:
+
+- `oidc.circleci.com/ssh-rerun` was false for all four exchanges. It is useful
+  for rejecting CircleCI SSH debug reruns, not for identifying a normal workflow
+  rerun.
+- `oidc.circleci.com/workflow-id` is the useful rerun discriminator in this
+  case. The original workflow execution and rerun had different workflow ids
+  under the same pipeline id.
+- CircleCI OIDC includes `job-id`, and the CircleCI API maps those job ids to
+  `test-node` and `build-node`. PackageMaze does not currently enrich Session
+  rows from the CircleCI API.
+- CircleCI OIDC does not include the workflow name, and CircleCI built-in
+  environment variables expose `CIRCLE_WORKFLOW_ID` but not a workflow-name
+  variable. The workflow name `build-and-test` is available through the
+  CircleCI API when querying by workflow id.
+- The PackageMaze CI token exchange route already accepts
+  `setup_invocation_id` and bounded `client` context, but the dogfood CircleCI
+  snippet did not send either. A PackageMaze CircleCI orb or setup command could
+  use that path to capture job/setup context explicitly.
+
+The UI direction that now seems most useful is an exchange-centric Session view:
+group by workflow execution, then job or setup invocation, then show exchange
+attempt, minted Token, and observed package activity. Separate Token and OIDC
+exchange tables are accurate as backend concepts, but for setup debugging they
+make the user mentally join rows that belong together.
+
 Relevant source paths:
 
 - `runtime-worker/src/npm/package-routes.ts`
