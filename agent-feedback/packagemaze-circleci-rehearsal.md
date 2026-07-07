@@ -490,3 +490,95 @@ Recommended PackageMaze follow-up:
 - Update the UI and MCP copy so users do not debug CircleCI/npm config when the
   actual state is "requests were observed, but no known Package Version history
   rows were projected."
+
+## Artifact Fill Throughput Investigation
+
+After the user pointed out that the install looked catastrophically slow, I
+pulled the CircleCI install logs and production PackageMaze state together.
+
+CircleCI/npm facts:
+
+- Four install jobs completed successfully:
+  - job 14 `test-node`: install step `2026-07-06T21:29:07Z` to
+    `2026-07-06T21:29:57Z`, about 50s
+  - job 15 `build-node`: install step `2026-07-06T21:30:16Z` to
+    `2026-07-06T21:31:11Z`, about 54s
+  - job 16 `test-node`: install step `2026-07-07T01:33:21Z` to
+    `2026-07-07T01:34:16Z`, about 55s
+  - job 17 `build-node`: install step `2026-07-07T01:34:27Z` to
+    `2026-07-07T01:35:21Z`, about 54s
+- Each install fetched 838 tarballs through PackageMaze, with 778 unique
+  tarball URLs and 26 duplicated URL values from duplicate lockfile package
+  locations.
+- Job 17 timing distribution was:
+  - p50 around 23.7s
+  - p90 around 44.3s
+  - max around 50.9s
+- npm `maxsockets` defaults to 15, and the Marko repo does not override it.
+  The completion curve was roughly 15-22 tarballs per second, which fits npm
+  client-side queueing plus fetch time. The Prettier `50834ms` line should not
+  be read as "PackageMaze spent 50s serving one request"; it likely includes
+  time waiting behind npm's fetch/socket pool.
+
+PackageMaze production evidence:
+
+- Production D1 `usage_event_dedupe` during the rerun showed artifact download
+  events completing at roughly the same 13-24 events/second as the npm logs.
+- A raw R2 usage ledger sample for
+  `usage_event_b46d956bb4f24d7995b11fcf94631eed` showed:
+  - package `yargs-unparser@2.0.0`
+  - `packageVersionId: null`
+  - descriptor `source: "cached"`
+  - `servingSource: "upstream"`
+- The `source: "cached"` aggregate dimension is therefore misleading for this
+  investigation. It means the intended Package Version source, not that the
+  request was served from a retained/cache hit. The usage ledger's
+  `servingSource` is the reliable field for cache-hit vs upstream-hit.
+- Production retained artifacts for Feed
+  `feed_1a344ea65c0a4b868f7aab047da4bae9` (`packagemaze/dogfood-npm`) were
+  created slowly after the rerun:
+  - at `2026-07-07T02:19:19Z`, only 491 retained artifacts existed
+  - first retained artifact: `2026-07-07T01:33:29Z`
+  - latest retained artifact at that point: `2026-07-07T02:18:57Z`
+  - span: about 45 minutes
+  - typical retention rate: 5-17 artifacts per minute
+- `package_usage_activity_rollups` still had no rows for the Feed, because cold
+  upstream metering does not have retained Package Version ids. This confirms
+  the Sessions visibility issue separately from the throughput problem.
+
+Code/config bottleneck:
+
+- `runtime-worker/src/npm/package-routes.ts` streams a full cold npm tarball
+  from upstream to npm and schedules artifact-fill work after the response.
+  This is the intended hot-path shape.
+- `runtime-worker/src/external-feeds/throttle.ts` sets
+  `EXTERNAL_FEED_THROTTLE_MAX_CONCURRENT = 1`.
+- The throttle key normalizes npmjs to one upstream-source key, so unrelated
+  package fills for npmjs contend on the same Durable Object throttle.
+- `infra/cloudflare/runtime/wrangler.jsonc` configures
+  `packagemaze-artifact-fill` with `max_batch_size: 1` and
+  `max_concurrency: 2`.
+- Together, the queue and upstream throttle make the cache warmer far slower
+  than npm's install demand.
+
+Deployment note:
+
+- The earlier `2026-07-06T21:29Z` original workflow ran before later production
+  Runtime deployments at `2026-07-06T22:49Z` and `2026-07-07T01:25Z`.
+- Current observed production release was `8808568b9`.
+- Later PR `#1478` (`a87c2a874`) adds observed CI activity and artifact-fill
+  job visibility, but it is not a throughput fix. It also awaits a D1
+  fill-job upsert before returning the cold tarball response, which needs care
+  because this is the same hot path under load.
+
+Conclusion:
+
+- CircleCI setup was not the bottleneck.
+- npm's 50s tail is partly expected from npm's own fetch/socket pool on a
+  large cold install.
+- PackageMaze's bigger bug is that it accepts hundreds of cold upstream
+  downloads but warms retained artifacts at only a few to a dozen per minute,
+  so a second job/rerun remains cold.
+- I filed PackageMaze issue
+  `https://github.com/packagemaze/packagemaze/issues/1481` for this throughput
+  and cache-warming bug.
