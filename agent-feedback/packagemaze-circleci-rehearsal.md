@@ -576,9 +576,83 @@ Conclusion:
 - CircleCI setup was not the bottleneck.
 - npm's 50s tail is partly expected from npm's own fetch/socket pool on a
   large cold install.
-- PackageMaze's bigger bug is that it accepts hundreds of cold upstream
-  downloads but warms retained artifacts at only a few to a dozen per minute,
-  so a second job/rerun remains cold.
+- PackageMaze's cache warmer bug is real, but it is not the full hot-path
+  explanation for the 54-56s install. The warmer is off the immediate response
+  path, and later evidence showed retained-ready artifacts still did not make
+  the Marko install fast.
 - I filed PackageMaze issue
   `https://github.com/packagemaze/packagemaze/issues/1481` for this throughput
   and cache-warming bug.
+
+## Corrected Package-Client Hot-Path Bottleneck
+
+The deeper investigation found that PackageMaze's main bottleneck for the Marko
+install is package-client tarball delivery latency, not CircleCI and not only
+the off-path artifact-fill warmer.
+
+Direct CircleCI baseline:
+
+- CircleCI UI setup branch job `2` installed the same Marko dependency set in
+  about 10s.
+- The restore-cache step said no npm cache was found, so this was not a warmed
+  CircleCI cache result.
+- The install still ran the same prepare script and reported:
+
+```text
+added 842 packages, and audited 847 packages in 10s
+```
+
+PackageMaze comparison:
+
+- PackageMaze jobs `17` and `25` both installed the same dependency set in
+  about 54-55s.
+- Job `17` fetched 838 tarballs through PackageMaze, with p50 about 23.7s,
+  p90 about 44.3s, and max about 50.9s.
+- Job `25` ran after the artifact-fill warmer had retained 523 of 778 unique
+  requested tarballs before the job started, but still took about 54.8s. Its
+  tarball timings were p50 about 22.9s, p90 about 43.1s, and max about 50.4s.
+- In job `25`, tarballs that were already retained before job start were better
+  than cold ones, but still too slow: 581 fetch lines classified as retained
+  before job start had p50 about 17.7s, p90 about 43.3s, and max about 50.3s.
+  The first retained completions were still around 1.2-1.6s.
+
+Hot-path code findings:
+
+- Cold npm lockfile tarball requests enter
+  `handleNpmLazyUpstreamArtifactRoute`.
+- For a standard URL such as
+  `/packagemaze/dogfood-npm/prettier/-/prettier-2.8.8.tgz`, PackageMaze first
+  calls `selectNpmUpstreamExactPackageVersion`, which fetches upstream npm
+  exact-version metadata from `/<package>/<version>`.
+- Only after that metadata fetch does PackageMaze call
+  `streamNpmUpstreamSelection`, fetch the upstream tarball, and stream it to
+  npm.
+- Direct npm lockfile installs do not need that extra per-tarball metadata
+  request; the lockfile already contains the tarball URL and integrity.
+- Retained artifacts are not automatically CDN-hot. For normal npm tarballs
+  under the Workers Cache API size threshold, `artifactBlobDownloadResponse`
+  checks Workers Cache API first, then falls back to private R2 on a miss and
+  schedules cache fill after the miss. A fresh CI colo with hundreds of unique
+  tarballs therefore still pays D1 plus Cache API miss plus R2 streaming through
+  the Worker for most first-touch retained artifacts.
+
+Corrected conclusion:
+
+- npm's `prettier ... 50s` log line mostly reflects npm socket-pool queueing;
+  it is not a single 50s upstream Prettier transfer.
+- The queue is long because PackageMaze's first-touch per-tarball service time
+  is far higher than direct npm registry CDN service time. Direct npm completed
+  the entire install in about 10s; PackageMaze consistently took about 54-56s.
+- The artifact-fill warmer should still be fixed, because it leaves reruns
+  cold or partly cold for too long. But the main user-visible bottleneck is the
+  package-client tarball hot path:
+  - avoid per-tarball exact-version metadata fetches where standard npmjs
+    lockfile tarball URLs can be safely served directly
+  - make retained artifacts use a genuinely fast/global cache path instead of
+    first-touch private R2 through the Worker for every unique small tarball
+  - expose `servingSource` and upstream metadata/artifact counts in Sessions so
+    setup debugging can distinguish cold upstream, retained R2, Workers Cache
+    API, and CDN cache
+- I filed PackageMaze issue
+  `https://github.com/packagemaze/packagemaze/issues/1483` for the corrected
+  hot-path bottleneck and linked it from `#1481`.
