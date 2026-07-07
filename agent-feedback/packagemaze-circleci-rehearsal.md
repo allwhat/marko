@@ -389,6 +389,37 @@ requests are harmless: they should be recorded in the CI Session, should warm or
 hit the PackageMaze cache on subsequent runs, and ideally should be coalesced
 while an identical cold upstream fetch is already in flight.
 
+I also investigated why the PackageMaze CI Session for CircleCI pipeline
+`a701f999-d8bf-4e77-8008-151ae3503554` showed four OIDC exchanges when the
+workflow shape appears to have only `test-node` and `build-node`. CircleCI had
+two workflow executions under that same pipeline id:
+
+```text
+d9731bb7-5390-4dc0-b7b1-809f3672d1e1  build-and-test  2026-07-06T21:28:56Z
+051f058f-d559-4980-9aa6-7880e59f23c2  build-and-test  2026-07-07T01:33:08Z
+```
+
+Each workflow execution had one `test-node` job and one `build-node` job, so
+PackageMaze recorded two exchanges for the original workflow execution and two
+for the rerun. PackageMaze currently keys CircleCI CI Sessions by repository and
+CircleCI pipeline id, so workflow reruns under the same pipeline are grouped
+into one Session. That is explainable from the current implementation, but it is
+confusing against the documented "one CI provider run attempt" Session language
+and against the user's expectation that the selected workflow would show two
+exchanges.
+
+The Session UI also rendered each exchange as `install Package not requested`.
+That text means `requested_package_name` on the OIDC exchange request was null:
+the job requested a Feed-wide install Token, not a package-scoped Token. It does
+not mean npm failed to request or download packages from the Feed. This wording
+is misleading in exactly the setup-debugging flow where users are trying to
+confirm package activity.
+
+I filed PackageMaze follow-up issue
+`https://github.com/packagemaze/packagemaze/issues/1479` to clarify CircleCI
+workflow execution grouping and replace the `Package not requested` copy with
+language such as "Feed-wide token" or "No package scope".
+
 Relevant source paths:
 
 - `runtime-worker/src/npm/package-routes.ts`
